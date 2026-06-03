@@ -1,10 +1,12 @@
 """Clau canonica de beneficiari (macro canon_beneficiari, aplicada a int_fega).
 
 Sintetic (sempre, CI-safe): construeix int_fega contra les fixtures (que inclouen variants
-de forma juridica de la mateixa entitat ficticia) i comprova que la clau canonica:
-  - col.lapsa variants de la MATEIXA entitat (SL / S. L. / S.L.U. <-> SLU) entre exercicis,
-  - NO fusiona formes distintes (SL vs SA: precision-first),
-  - plega accents i puntuacio (resultat en majuscules, sense punts).
+d'espaiat/forma de la mateixa entitat ficticia) i comprova que la clau canonica (plega
+accents + majuscules + elimina tot allo no alfanumeric):
+  - col.lapsa variants de la MATEIXA entitat (SL / S. L. / S.L.U. / SLU; GREEN FRUITS /
+    GREENFRUITS) entre exercicis,
+  - NO fusiona seqüencies distintes (SL vs SA; "FOO" vs "FOO SL": precision-first),
+  - nomes deixa lletres i xifres en majuscules (sense espais ni puntuacio).
 """
 
 import os
@@ -63,24 +65,30 @@ def _canon(con, name: str) -> str:
 def test_variants_de_forma_col_lapsen(int_fega_db: Path):
     con = duckdb.connect(str(int_fega_db), read_only=True)
     # Mateixa entitat, formes "SL" / "S. L." en exercicis distints -> mateixa clau.
-    assert _canon(con, "MAS FICTICI SL") == _canon(con, "MAS FICTICI S. L.") == "MAS FICTICI SL"
+    assert _canon(con, "MAS FICTICI SL") == _canon(con, "MAS FICTICI S. L.") == "MASFICTICISL"
     # Forma "S.L.U." i "SLU" -> mateixa clau.
+    assert _canon(con, "HORT EXEMPLE S.L.U.") == _canon(con, "HORT EXEMPLE SLU") == "HORTEXEMPLESLU"
+    # Espaiat distint del mateix nom (el cas GREENFRUITS): "GREEN FRUITS" / "GREENFRUITS".
     assert (
-        _canon(con, "HORT EXEMPLE S.L.U.") == _canon(con, "HORT EXEMPLE SLU") == "HORT EXEMPLE SLU"
+        _canon(con, "GREEN FRUITS COOP. V.")
+        == _canon(con, "GREENFRUITS COOP. V.")
+        == "GREENFRUITSCOOPV"
     )
 
 
 def test_formes_distintes_no_es_fusionen(int_fega_db: Path):
     con = duckdb.connect(str(int_fega_db), read_only=True)
-    # Precision-first: SL i SA son formes distintes; no s'han de fusionar.
+    # Precision-first per construccio: SL i SA son seqüencies distintes; no es fusionen.
     assert _canon(con, "MAS FICTICI SL") != _canon(con, "MAS FICTICI SA")
-    assert _canon(con, "MAS FICTICI SA") == "MAS FICTICI SA"
+    assert _canon(con, "MAS FICTICI SA") == "MASFICTICISA"
+    # "FOO" sense forma != "FOO SL" (afig lletres): no es fusionen.
+    assert _canon(con, "MAS FICTICI") != _canon(con, "MAS FICTICI SL")
+    assert _canon(con, "MAS FICTICI") == "MASFICTICI"
 
 
-def test_majuscules_i_sense_puntuacio(int_fega_db: Path):
+def test_majuscules_sense_espais_ni_puntuacio(int_fega_db: Path):
     con = duckdb.connect(str(int_fega_db), read_only=True)
-    # La clau canonica plega accents/puntuacio: majuscules, sense punts.
+    # La clau nomes porta lletres i xifres en majuscules: sense espais ni puntuacio.
     clau = _canon(con, "HORT EXEMPLE S.L.U.")
     assert clau == clau.upper()
-    assert "." not in clau
-    assert clau.strip() == clau
+    assert clau.isalnum()
