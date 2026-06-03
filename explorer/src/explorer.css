@@ -101,7 +101,130 @@ body {
   border-radius: var(--r-1);
 }
 
+/* Peu de credits (atribucio de fonts), sempre visible. */
+.ex-credits {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: var(--s-5) var(--s-5) var(--s-8);
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-5);
+  font-size: var(--t-2xs);
+  color: var(--ink-3);
+}
+.ex-credits strong {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+.ex-credits a {
+  color: var(--blau);
+}
+
+/* Coropleta. */
+.ex-map {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: var(--s-5);
+  align-items: start;
+}
+.map-svg {
+  display: block;
+  width: 100%;
+  height: min(72vh, 640px);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
+}
+.map-tile {
+  stroke: var(--line-hair);
+  stroke-width: 0.4;
+  transition: fill var(--dur) var(--ease);
+  cursor: pointer;
+}
+.map-tile:hover {
+  stroke: var(--blau);
+  stroke-width: 1.2;
+}
+.map-tile:focus-visible {
+  outline: none;
+  stroke: var(--blau);
+  stroke-width: 1.6;
+}
+.map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+  margin-top: var(--s-3);
+  font-size: var(--t-2xs);
+  color: var(--ink-2);
+}
+.leg-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.leg-item i {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--r-1);
+  border: 1px solid var(--line);
+}
+.map-aside {
+  position: sticky;
+  top: 76px;
+}
+.map-focus {
+  background: var(--paper-sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--r-2);
+  padding: var(--s-3);
+  margin-bottom: var(--s-3);
+  font-size: var(--t-sm);
+  color: var(--ink);
+}
+.map-list {
+  max-height: 56vh;
+  overflow-y: auto;
+  padding-right: 0.3rem;
+}
+.map-row {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.22rem 0;
+  border-top: 1px solid var(--line-hair);
+  font-size: var(--t-sm);
+}
+.map-row .sw {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--r-1);
+  border: 1px solid var(--line);
+}
+.map-row .nm {
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.map-row .vl {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  white-space: nowrap;
+}
+.map-unres .nm {
+  color: var(--ink-3);
+}
+
 @media (max-width: 1000px) {
+  .ex-map {
+    grid-template-columns: 1fr;
+  }
+  .map-aside {
+    position: static;
+  }
   .ex-layout {
     grid-template-columns: 1fr;
   }

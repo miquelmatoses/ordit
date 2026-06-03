@@ -3,9 +3,11 @@
    (el mart son ~12k files). Identificadors en angles ASCII; interficie en valencia. */
 
 import * as duckdb from "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
+import { loadGeo, mapHtml, fmtEur0 } from "./map.js";
 
 // Ruta del Parquet publicat (relativa a /explorer/), servit com a fitxer estatic.
 const PARQUET_URL = new URL("../data/dist/mart_ajudes_pac_juridiques.parquet", location.href).href;
+const GEO_URL = new URL("geo/municipis-cv.geojson", location.href).href;
 
 // Procedencia, sempre visible (cap dada sense font).
 const SOURCE = {
@@ -43,6 +45,7 @@ const fmtInt = (n) => eur.format(n);
 
 const state = {
   rows: [],
+  geo: null,
   query: "",
   sel: {
     exercici: new Set(),
@@ -54,10 +57,27 @@ const state = {
   facetSearch: { comarca: "", municipi: "", mesura: "" },
   sortKey: "import_eur",
   sortDir: "desc",
-  view: "taula", // taula | grafic
+  view: "taula", // taula | mapa | grafic
+  mapBy: "comarca", // comarca | municipi
   chartBy: "municipi", // municipi | beneficiari
   density: "compacte",
 };
+
+// Agregat geografic per a la coropleta: import per codi_ine i per comarca, + no resolts.
+function geoAgg(rows) {
+  const byIne = new Map();
+  const byComarca = new Map();
+  let unresolved = 0;
+  for (const r of rows) {
+    if (r.codi_ine) {
+      byIne.set(r.codi_ine, (byIne.get(r.codi_ine) || 0) + r.import_eur);
+      byComarca.set(r.comarca, (byComarca.get(r.comarca) || 0) + r.import_eur);
+    } else {
+      unresolved += r.import_eur; // codi_ine NULL <=> comarca "(sense comarca)"
+    }
+  }
+  return { byIne, byComarca, unresolved };
+}
 
 /* ---------- Carrega del mart amb DuckDB-WASM ---------- */
 async function loadMart() {
@@ -278,7 +298,11 @@ function render() {
   const rows = sortRows(filteredRows());
   const facets = FACETS.map(facetHtml).join("");
   const content =
-    state.view === "taula" ? tableHtml(rows) : chartHtml(rows);
+    state.view === "taula"
+      ? tableHtml(rows)
+      : state.view === "mapa"
+        ? mapHtml(state.geo, geoAgg(rows), state.mapBy)
+        : chartHtml(rows);
   document.getElementById("app").innerHTML = `
     <header class="ex-bar"><div class="ex-bar-inner">
       <a class="ordit-logo" href="#"><span class="ordit-mark">${MARK}</span><span class="ordit-word"><b>or</b>dit</span></a>
@@ -301,6 +325,7 @@ function render() {
           <div class="cluster"><span class="mono" style="margin-right:.2rem">Vista</span>
             <div class="seg">
               <button data-view="taula" class="${state.view === "taula" ? "active" : ""}" aria-pressed="${state.view === "taula"}">Taula</button>
+              <button data-view="mapa" class="${state.view === "mapa" ? "active" : ""}" aria-pressed="${state.view === "mapa"}">Mapa</button>
               <button data-view="grafic" class="${state.view === "grafic" ? "active" : ""}" aria-pressed="${state.view === "grafic"}">Grafic</button>
             </div>
           </div>
@@ -309,7 +334,20 @@ function render() {
         ${chipsHtml()}
         ${content}
       </main>
-    </div>`;
+    </div>
+    ${creditsHtml()}`;
+}
+
+// Atribucio de fonts, sempre visible (peu de credits a totes les vistes).
+function creditsHtml() {
+  return `<footer class="ex-credits mono">
+    <span><strong>Fonts.</strong> Dades de la PAC:
+      <a href="${SOURCE.url}" target="_blank" rel="noopener">FEGA</a> · ${SOURCE.llic}.</span>
+    <span>Geometria de municipis: © EuroGeographics
+      (<a href="https://ec.europa.eu/eurostat/web/gisco" target="_blank" rel="noopener">GISCO</a>/IGN), CC BY.</span>
+    <span>Codis postals:
+      <a href="https://www.geonames.org/" target="_blank" rel="noopener">GeoNames</a>, CC BY 4.0.</span>
+  </footer>`;
 }
 
 /* ---------- Esdeveniments (delegacio) ---------- */
@@ -326,6 +364,7 @@ function setupEvents() {
         state.sortDir = k === "import_eur" || k === "exercici" ? "desc" : "asc";
       }
     } else if (t.dataset.view) state.view = t.dataset.view;
+    else if (t.dataset.mapby) state.mapBy = t.dataset.mapby;
     else if (t.dataset.chartby) state.chartBy = t.dataset.chartby;
     else if (t.dataset.density) state.density = t.dataset.density;
     else if (t.dataset.chipFacet) state.sel[t.dataset.chipFacet].delete(t.dataset.chipVal);
@@ -364,6 +403,14 @@ function setupEvents() {
   app.addEventListener("click", (e) => {
     if (e.target.id === "csv") downloadCsv();
   });
+  // Valor al focus de la coropleta (cursor o teclat).
+  const showFocus = (e) => {
+    const t = e.target.closest(".map-tile");
+    const box = document.getElementById("map-focus");
+    if (t && box) box.textContent = `${t.dataset.name} · ${fmtEur0(Number(t.dataset.val))}`;
+  };
+  app.addEventListener("pointerover", showFocus);
+  app.addEventListener("focusin", showFocus);
 }
 
 function downloadCsv() {
@@ -385,12 +432,12 @@ function downloadCsv() {
 /* ---------- Arrencada ---------- */
 (async () => {
   try {
-    state.rows = await loadMart();
+    [state.rows, state.geo] = await Promise.all([loadMart(), loadGeo(GEO_URL)]);
     setupEvents();
     render();
   } catch (err) {
     document.getElementById("app").innerHTML = `<div class="ex-error">
-      <p><strong>No s'ha pogut carregar el mart.</strong></p>
+      <p><strong>No s'ha pogut carregar l'explorador.</strong></p>
       <p class="mono">${esc(err.message || err)}</p>
       <p>Has publicat el Parquet? Executa <code>just publish</code> i torna a obrir amb <code>just serve</code>.</p>
     </div>`;
