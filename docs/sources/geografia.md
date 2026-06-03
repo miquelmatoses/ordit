@@ -21,10 +21,17 @@ la llicència de cartografia IGN/ICV traçada).
 | `codi_ine` (codis de municipi) | INE — Instituto Nacional de Estadística (fets públics) | Domini públic |
 | Noms valencians + comarca | Atributs del GeoJSON de municipis (projecte TopQuaranta; toponímia oficial de la GVA), verificats contra INE i contra [`poblacio-valenciana`](https://github.com/) (**CC0**) | Toponímia GVA / verificació CC0 |
 | `xwalk_cp_ine` (codi postal → INE) | **GeoNames** (`download.geonames.org/export/zip/ES.zip`), columna `admin3code` | **CC BY 4.0** (atribució a GeoNames) |
+| Geometria de municipis (`explorer/geo/municipis-cv.geojson`) | **GISCO/Eurostat LAU 2021** (`gisco-services.ec.europa.eu/.../LAU_RG_01M_2021_4326.geojson`), `LAU_ID` = codi INE; per a Espanya, font nacional **IGN** via EuroBoundaryMap | **CC BY** — atribució **© EuroGeographics** |
 
-> **Atribució GeoNames** (CC BY 4.0): el crosswalk de codis postals deriva de dades de
-> [GeoNames](https://www.geonames.org/). La **geometria** dels municipis (Fase 2) encara
-> NO s'incorpora: depèn de confirmar i atribuir l'upstream cartogràfic (IGN/ICV).
+> **Atribució GeoNames** (CC BY 4.0): el crosswalk de codis postals deriva de
+> [GeoNames](https://www.geonames.org/).
+>
+> **Atribució de la geometria** (CC BY): els límits municipals provenen de
+> [GISCO/Eurostat (LAU)](https://ec.europa.eu/eurostat/web/gisco), versió harmonitzada de
+> l'EuroBoundaryMap d'**EuroGeographics**; per a Espanya la font nacional és l'**IGN**.
+> Atribució requerida: «© EuroGeographics». S'enllaça a `dim_municipi` per `codi_ine`
+> (= `LAU_ID`). Es genera amb `ingest/geo/build_geometry.py`. Resolució 1:1M, simplificada
+> (coordenades arrodonides) per a un mapa estilitzat.
 
 ## Comarcalització (decisió documentada)
 

@@ -39,7 +39,7 @@ source = ["ingest"]
 # build_seeds.py es un script de generacio (llig dades externes i escriu seeds); la seua
 # correccio es verifica amb l'informe de cobertura que imprimeix i amb els tests de dbt
 # sobre els seeds resultants, no amb cobertura de linies.
-omit = ["ingest/geo/build_seeds.py"]
+omit = ["ingest/geo/build_seeds.py", "ingest/geo/build_geometry.py"]
 
 [tool.coverage.report]
 fail_under = 70
