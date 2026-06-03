@@ -106,6 +106,45 @@ Cada fila és **una línia per mesura** d'un beneficiari, no un beneficiari agre
   automàtica per heurística**. La invariant es blinda amb el test dbt
   `assert_noms_normalitzats` (cap nom del crosswalk pot sobreviure sense corregir al mart).
 
+## Clau canònica de beneficiari (identitat sense CIF)
+
+Com que el fitxer **no porta CIF/NIF**, la identitat d'entitat depén del nom, i el mateix
+beneficiari apareix amb variacions de forma jurídica i d'espais **sobretot entre exercicis**
+(p. ex. `GREENMED SL` el 2024 i `GREENMED S. L.` el 2025 són la mateixa empresa). Per a no
+partir-ne el total en agrupar, es deriva una **clau canònica** (`canonical_key` a `int_fega`,
+`clau_beneficiari` al mart) amb la macro [`canon_beneficiari`](../../ordit_dbt/macros/canon_beneficiari.sql).
+És una **heurística, precision-first**: davant del dubte, **no fusiona** (sense CIF no podem
+confirmar identitat). El **nom d'origen es preserva** (`nom_beneficiari`); el canònic és una
+columna nova, mai una sobreescriptura.
+
+Regles aplicades (en este ordre):
+
+1. **Majúscules + plega accents** (`strip_accents`): `Société`/`SOCIÉTÉ` → `SOCIETE`.
+2. **Tota la puntuació a espai**: punts, comes, guions, `&`, parèntesis, apòstrofs…
+3. **Col·lapsa espais** (amb farciment als extrems per als límits de paraula).
+4. **Canonicalitza les formes jurídiques freqüents**, les més llargues primer (perquè
+   `S L U` no es trenque com a `SL U`): `S.L.`/`S. L.` → `SL`; `SA`; `SLU`; `SAU`; `SLL`;
+   `SAT`; `SCV` (de `S. Coop. V.`); `SCCL`; `CB`. La forma **es manté** (no s'elimina):
+   `FOO SL` i `FOO SA` queden **distints** (poden ser entitats diferents).
+5. **Trim** + col·lapsa final.
+
+**Etiqueta representativa** per clau (`nom_canonic`): la variant del nom d'origen **més
+freqüent** (per nombre de files), desempatant per la **més completa** (més llarga) i després
+alfabèticament. L'explorador **agrupa beneficiaris per la clau** i mostra esta etiqueta.
+
+**Limitacions** (és heurístic, es toleren residus):
+
+- Sense CIF, dues entitats homònimes amb la mateixa forma jurídica col·lapsarien; és el preu
+  de precision-first vs. el risc invers (partir una entitat). L'enllaç fort amb el BORME
+  (Fase 3 completa) és el que aportarà el CIF.
+- Dues formes jurídiques seguides (rar) poden no plegar-se totes dues en una sola passada.
+- No es canonicalitzen totes les formes possibles, només una **llista defensable i acotada**
+  de les freqüents a la CV; ampliar-la és segur i incremental.
+- Efecte mesurat sobre el conjunt real (juny 2026): **63.274 → 63.074** claus (−200, 0,32 %),
+  totes fusions de **2 variants**, majoritàriament accents/puntuació del mateix nom entre
+  exercicis. La invariant `clau_beneficiari`/`nom_canonic` **no nul·la** es prova a dbt; la
+  normalització, a `tests/test_clau_beneficiari.py` (fixtures sintètiques, CI-safe).
+
 ## Estat del contracte
 
 El contracte provisional inicial **no casava** amb este esquema (sense `NIF`, sense
