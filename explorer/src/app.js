@@ -352,21 +352,20 @@ function chipsHtml() {
 // Cel.la d'una dimensio segons el seu tipus (beneficiari fort, mesura ampla, fons en
 // pastilla, exercici numeric). El valor pot ser undefined si la dimensio no esta agrupada,
 // pero aci nomes es pinten columnes ACTIVES, aixi que sempre hi es.
-// Badge d'enllac corporatiu. La font determina l'identificador mostrat: cooperatives -> CIF,
-// SAT -> numero de registre. match = confirmat (verd); possible = candidat (ambre); MAI es
-// llig un possible com a fet.
+// Badge d'enllac corporatiu, ESTIL UNIC i DISCRET (sense color de confiança): la cel.la
+// nomes mostra l'identificador (CIF de cooperatives o numero de registre de SAT) amb la
+// sigla de la font. La confianca (match/possible) NO es perd: viu al tooltip i a la faceta
+// "Estat de l'enllac". Aixi la taula queda homogenia.
 function linkBadgeHtml(clau) {
   const link = state.linkByClau.get(clau);
   if (!link) return "";
   const coop = link.font === "cooperatives";
-  const cls = link.estat === "match" ? "badge-ok" : "badge-avis";
   const sigla = coop ? "Coop." : "SAT";
   const ident = coop ? link.cif : link.clauReg; // CIF (coop) o num. de registre (SAT)
-  const etiqueta = link.estat === "match" ? `✓ ${sigla}` : `${sigla}?`;
   const idLabel = coop ? "CIF" : "Num. registre";
   const registre = coop ? "Cooperatives" : "SAT";
   const title = `Enllac al Registre de ${registre} de la CV · ${ESTAT_LABELS[link.estat]} · ${idLabel} ${ident}`;
-  return ` <span class="badge ${cls} link-badge" title="${esc(title)}">${etiqueta} ${esc(ident)}</span>`;
+  return ` <span class="badge badge-neutral link-badge" title="${esc(title)}">${sigla} ${esc(ident)}</span>`;
 }
 
 function dimCellHtml(col, r) {
