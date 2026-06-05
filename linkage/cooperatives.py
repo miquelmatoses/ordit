@@ -5,10 +5,9 @@ desambiguador. Emet sempre estat (match / possible / no-match) i traçabilitat, 
 dur. En match/possible arrossega el CIF i la clau registral de la cooperativa (el premi:
 injecta a FEGA el CIF que no te). Reutilitza les utilitats de l'spike (linkage/coverage.py).
 
-Estats:
-  - match    = clau canonica igual I municipi coincident.
-  - possible = clau canonica igual amb municipi distint/sense resoldre, O nucli igual
-               (nom sense forma juridica; token-set per a variants).
+Estats (denominacions uniques al registre -> el municipi no discrimina):
+  - match    = clau canonica EXACTA i candidat UNIC (per CIF), siga quin siga el municipi.
+  - possible = nomes els incerts: nucli igual (aproximat) o clau exacta amb >1 CIF distint.
   - no-match = res.
 """
 
@@ -75,10 +74,12 @@ def build_classified(con: duckdb.DuckDBPyConnection) -> None:
                max(municipi) as muni_fega, any_value({core("nom_canonic")}) as core
         from fega where {cooperativa("nom_canonic")} group by clau
     """)
-    # Candidats per clau canonica EXACTA: n_ck = nombre de cooperatives distintes (normal: 1).
+    # Candidats per clau canonica EXACTA: n_ck = nombre de cooperatives DISTINTES per CIF (la
+    # clau legal), no per cadena de nom -> una mateixa coop duplicada al directori (mateix CIF,
+    # puntuacio distinta) val 1, no 2. El normal es 1 (denominacions uniques).
     con.execute("""
         create or replace temp view ck_agg as
-        select e.clau, count(distinct c.coop_nom) as n_ck,
+        select e.clau, count(distinct c.cif) as n_ck,
                any_value(c.cif) as cif, any_value(c.clau_reg) as clau_reg,
                any_value(c.coop_nom) as coop_nom, any_value(c.coop_muni) as coop_muni
         from fega_ent e join coop c on c.ck = e.clau
@@ -87,7 +88,7 @@ def build_classified(con: duckdb.DuckDBPyConnection) -> None:
     # Candidats per nucli (aproximat), nomes per a entitats sense candidat de clau exacta.
     con.execute("""
         create or replace temp view core_agg as
-        select e.clau, count(distinct c.coop_nom) as n_core,
+        select e.clau, count(distinct c.cif) as n_core,
                any_value(c.cif) as cif, any_value(c.clau_reg) as clau_reg,
                any_value(c.coop_nom) as coop_nom, any_value(c.coop_muni) as coop_muni
         from fega_ent e join coop c on c.core = e.core and length(e.core) >= 5

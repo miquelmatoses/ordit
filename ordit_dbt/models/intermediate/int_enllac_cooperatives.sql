@@ -32,12 +32,14 @@ fega_ent as (
     group by canonical_key
 ),
 
--- Candidats per clau canonica EXACTA: nombre de cooperatives distintes que comparteixen la
--- clau (n_candidats); el normal es 1 (denominacions uniques).
+-- Candidats per clau canonica EXACTA: nombre de cooperatives DISTINTES (per CIF, la clau
+-- legal de l'entitat) que comparteixen la clau. Es compta per CIF, no per cadena de nom, aixi
+-- una mateixa coop DUPLICADA al directori (mateix CIF, puntuacio distinta) val 1, no 2. El
+-- normal es 1 (denominacions uniques); >1 nomes si dos CIF distints comparteixen el nom.
 ck_agg as (
     select
         e.canonical_key,
-        count(distinct c.coop_nom) as n_candidats,
+        count(distinct c.cif) as n_candidats,
         any_value(c.cif) as cif,
         any_value(c.clau_reg) as clau_reg
     from (select distinct canonical_key from {{ ref("int_fega") }}) e
@@ -46,10 +48,11 @@ ck_agg as (
 ),
 
 -- Candidats per nucli (aproximat), nomes per a entitats sense candidat de clau exacta.
+-- Tambe es compta per CIF (dedupe del duplicat de font).
 core_agg as (
     select
         e.canonical_key,
-        count(distinct c.coop_nom) as n_core,
+        count(distinct c.cif) as n_core,
         any_value(c.cif) as cif,
         any_value(c.clau_reg) as clau_reg
     from fega_ent e

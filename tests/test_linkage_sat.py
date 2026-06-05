@@ -17,33 +17,37 @@ def _con():
     con.execute("""insert into fega values
         ('A','SAT 9999 EXEMPLE FICTICI','Exemple de Dalt',100),  -- match (numero 9999 coincident)
         ('B','SAT N 8888 ALTRE EXEMPLE','Lloc',50),              -- possible (nucli; numero no casa)
-        ('C','SAT 7777 INEXISTENT','Lloc X',10)                  -- no-match
+        ('D','SAT 7777 SUFIX EXEMPLE','Lloc D',70),              -- match (directori 7777CV)
+        ('C','SAT 6666 INEXISTENT','Lloc X',10)                  -- no-match
     """)
     con.execute("create table sat_raw(nom varchar, num_reg varchar, municipi varchar)")
+    # 7777CV: el directori porta el sufix d'ambit; el nucli numeric (7777) ha de casar.
     con.execute("""insert into sat_raw values
         ('EXEMPLE FICTICI','9999','EXEMPLE DE DALT'),
-        ('ALTRE EXEMPLE','5555','UN ALTRE')
+        ('ALTRE EXEMPLE','5555','UN ALTRE'),
+        ('SUFIX EXEMPLE','7777CV','LLOC D')
     """)
     return con
 
 
 def test_estat_nova_logica():
     rep = measure(_con())
-    assert rep["n"] == 3
-    assert rep["n_match"] == 1  # numero de registre coincident (9999)
+    assert rep["n"] == 4
+    assert rep["n_match"] == 2  # numero coincident: 9999 (pur) i 7777 (directori 7777CV)
     assert rep["n_possible"] == 1  # nucli del nom casa pero el numero no (8888 != 5555)
     assert rep["n_nomatch"] == 1
 
 
-def test_match_per_numero_de_registre():
-    # Nom que no casa pel nucli pero si pel numero de registre -> ara MATCH (clau unica).
+def test_match_pel_numero_amb_sufix_cv():
+    # El directori porta el numero amb sufix d'ambit ("9999CV"); FEGA encasta nomes "9999".
+    # El nucli numeric ha de casar -> MATCH, encara que el nom no casa gens.
     con = duckdb.connect()
     con.execute(
         "create table fega(clau varchar, nom_canonic varchar, municipi varchar, import_eur double)"
     )
     con.execute("insert into fega values ('A','SAT 9999 NOM QUE NO CASA','Lloc',100)")
     con.execute("create table sat_raw(nom varchar, num_reg varchar, municipi varchar)")
-    con.execute("insert into sat_raw values ('TOTALMENT DISTINT','9999','Altre')")
+    con.execute("insert into sat_raw values ('TOTALMENT DISTINT','9999CV','Altre')")
     rep = measure(con)
     assert rep["n_match"] == 1
     assert rep["n_possible"] == 0

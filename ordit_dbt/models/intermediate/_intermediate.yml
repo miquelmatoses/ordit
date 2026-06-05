@@ -18,9 +18,10 @@ models:
   - name: int_enllac_cooperatives
     description: >
       Enllac determinista FEGA <-> Registre de Cooperatives de la CV. Com el registre
-      certifica denominacions uniques, match = nom canonic EXACTE i candidat UNIC (sense
-      municipi); possible = nucli aproximat o exacte ambigu (>1 cooperativa). Una fila per
-      canonical_key amb estat_enllac, cif, clau_registral, enllac_exacte i n_candidats.
+      certifica denominacions uniques, match = nom canonic EXACTE i candidat UNIC per CIF
+      (una coop duplicada al directori amb mateix CIF val 1, no inflia el possible); possible
+      = nucli aproximat o exacte ambigu (>1 CIF distint). Una fila per canonical_key amb
+      estat_enllac, cif, clau_registral, enllac_exacte i n_candidats.
     columns:
       - name: canonical_key
         tests:
@@ -36,8 +37,9 @@ models:
   - name: int_enllac_sat
     description: >
       Enllac determinista FEGA <-> Registre de SAT de la CV. El numero de registre es la clau
-      unica: match = numero de registre coincident; possible = nucli-SAT del nom (sat_core,
-      aproximat) sense numero coincident. Nomes el subconjunt SAT de FEGA. Una fila per
+      unica: match = numero de registre coincident (nucli numeric, ignorant el sufix d'ambit
+      "CV" del directori); possible = nucli-SAT del nom (sat_core, aproximat) sense numero
+      coincident. Nomes el subconjunt SAT de FEGA. Una fila per
       canonical_key amb estat_enllac, clau_registral (= numero), enllac_exacte i n_candidats.
     columns:
       - name: canonical_key

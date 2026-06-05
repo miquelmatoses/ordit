@@ -7,8 +7,8 @@ un enllac dur. Sense CIF: s'arrossega el numero de registre com a identificador 
 Mesura + mostra; NO toca el mart ni l'explorador. Reutilitza canon() de linkage/coverage.py.
 
 Estats:
-  - match    = nucli-SAT del nom igual I municipi coincident.
-  - possible = nucli-SAT igual amb municipi distint/sense resoldre, O numero de registre igual.
+  - match    = numero de registre coincident (clau unica; nucli numeric, ignorant el sufix CV).
+  - possible = nomes nucli-SAT del nom igual (aproximat), sense numero coincident.
   - no-match = res.
 """
 
@@ -89,14 +89,17 @@ def build_classified(con: duckdb.DuckDBPyConnection) -> None:
                any_value({regnum("nom_canonic")}) as regnum
         from fega where {sat_subset("nom_canonic")} group by clau
     """)
-    # Candidats per NUMERO DE REGISTRE (clau unica) -> fort.
+    # Candidats per NUMERO DE REGISTRE (clau unica) -> fort. El directori el porta amb sufix
+    # d'ambit ("498CV") i FEGA encasta nomes el numero ("498"); es compara el NUCLI NUMERIC.
     con.execute("""
         create or replace temp view reg_agg as
         select e.clau, count(distinct s.num_reg) as n_reg,
                any_value(s.num_reg) as num_reg, any_value(s.sat_nom) as sat_nom,
                any_value(s.sat_muni) as sat_muni
         from fega_ent e
-        join sat s on try_cast(s.num_reg as bigint) = try_cast(e.regnum as bigint)
+        join sat s
+            on try_cast(regexp_replace(s.num_reg, '[^0-9]', '', 'g') as bigint)
+               = try_cast(e.regnum as bigint)
         where e.regnum is not null
         group by e.clau
     """)

@@ -36,7 +36,9 @@ fega_sat as (
     group by canonical_key
 ),
 
--- Candidats per NUMERO DE REGISTRE (clau unica) -> senyal fort.
+-- Candidats per NUMERO DE REGISTRE (clau unica) -> senyal fort. El directori el porta amb
+-- sufix d'ambit ("498CV"); FEGA encasta nomes el numero ("498"). Es compara el NUCLI
+-- NUMERIC (sense el sufix) als dos costats; clau_registral conserva el valor del directori.
 reg_agg as (
     select
         e.canonical_key,
@@ -44,7 +46,9 @@ reg_agg as (
         any_value(s.num_reg) as num_reg,
         any_value(s.sat_nom) as sat_nom
     from fega_sat e
-    join sat s on try_cast(s.num_reg as bigint) = try_cast(e.regnum as bigint)
+    join sat s
+        on try_cast(regexp_replace(s.num_reg, '[^0-9]', '', 'g') as bigint)
+           = try_cast(e.regnum as bigint)
     where e.regnum is not null
     group by e.canonical_key
 ),
