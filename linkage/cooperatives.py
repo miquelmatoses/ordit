@@ -5,10 +5,9 @@ desambiguador. Emet sempre estat (match / possible / no-match) i traçabilitat, 
 dur. En match/possible arrossega el CIF i la clau registral de la cooperativa (el premi:
 injecta a FEGA el CIF que no te). Reutilitza les utilitats de l'spike (linkage/coverage.py).
 
-Estats:
-  - match    = clau canonica igual I municipi coincident.
-  - possible = clau canonica igual amb municipi distint/sense resoldre, O nucli igual
-               (nom sense forma juridica; token-set per a variants).
+Estats (denominacions uniques al registre -> el municipi no discrimina):
+  - match    = clau canonica EXACTA i candidat UNIC (per CIF), siga quin siga el municipi.
+  - possible = nomes els incerts: nucli igual (aproximat) o clau exacta amb >1 CIF distint.
   - no-match = res.
 """
 
@@ -60,48 +59,36 @@ def build_classified(con: duckdb.DuckDBPyConnection) -> None:
 
     Requereix les vistes `fega` (nom, nom_canonic, import_eur, clau, municipi) i `coop_raw`.
     """
-    # Cooperativa = clau canonica (clau_beneficiari ja es canonica) + nucli + municipi canonic.
+    # El registre certifica denominacions UNIQUES: nom canonic exacte + candidat unic = match,
+    # siga quin siga el municipi (la diferencia de municipi es quasi sempre grafia bilingue del
+    # mateix poble). El municipi es conserva nomes per a la mostra, no discrimina l'estat.
     con.execute(f"""
         create or replace temp view coop as
         select distinct nom as coop_nom, cif, clau_reg, municipi as coop_muni,
-               {canon("nom")} as ck, {core("nom")} as core, {canon("municipi")} as muni_ck
+               {canon("nom")} as ck, {core("nom")} as core
         from coop_raw where {canon("nom")} is not null
     """)
-    # Entitats cooperatives de FEGA i els seus municipis (poden ser-ne diversos).
     con.execute(f"""
         create or replace temp view fega_ent as
         select clau, any_value(nom_canonic) as nom, sum(import_eur) as import_eur,
                max(municipi) as muni_fega, any_value({core("nom_canonic")}) as core
         from fega where {cooperativa("nom_canonic")} group by clau
     """)
-    con.execute(f"""
-        create or replace temp view fega_muni as
-        select distinct clau, {canon("municipi")} as muni_ck
-        from fega where {cooperativa("nom_canonic")} and municipi is not null
-    """)
-    # Candidats per clau canonica, amb si el municipi coincideix.
-    con.execute("""
-        create or replace temp view cand_ck as
-        select e.clau, c.coop_nom, c.cif, c.clau_reg, c.coop_muni,
-               exists (select 1 from fega_muni m where m.clau = e.clau and m.muni_ck = c.muni_ck)
-                   as muni_ok
-        from fega_ent e join coop c on c.ck = e.clau
-    """)
+    # Candidats per clau canonica EXACTA: n_ck = nombre de cooperatives DISTINTES per CIF (la
+    # clau legal), no per cadena de nom -> una mateixa coop duplicada al directori (mateix CIF,
+    # puntuacio distinta) val 1, no 2. El normal es 1 (denominacions uniques).
     con.execute("""
         create or replace temp view ck_agg as
-        select clau,
-               count(distinct coop_nom) as n_ck,
-               bool_or(muni_ok) as has_muni,
-               arg_max(cif, muni_ok::int) as cif,
-               arg_max(clau_reg, muni_ok::int) as clau_reg,
-               arg_max(coop_nom, muni_ok::int) as coop_nom,
-               arg_max(coop_muni, muni_ok::int) as coop_muni
-        from cand_ck group by clau
+        select e.clau, count(distinct c.cif) as n_ck,
+               any_value(c.cif) as cif, any_value(c.clau_reg) as clau_reg,
+               any_value(c.coop_nom) as coop_nom, any_value(c.coop_muni) as coop_muni
+        from fega_ent e join coop c on c.ck = e.clau
+        group by e.clau
     """)
-    # Candidats per nucli (nomes per a entitats sense match de clau).
+    # Candidats per nucli (aproximat), nomes per a entitats sense candidat de clau exacta.
     con.execute("""
         create or replace temp view core_agg as
-        select e.clau, count(distinct c.coop_nom) as n_core,
+        select e.clau, count(distinct c.cif) as n_core,
                any_value(c.cif) as cif, any_value(c.clau_reg) as clau_reg,
                any_value(c.coop_nom) as coop_nom, any_value(c.coop_muni) as coop_muni
         from fega_ent e join coop c on c.core = e.core and length(e.core) >= 5
@@ -112,10 +99,13 @@ def build_classified(con: duckdb.DuckDBPyConnection) -> None:
         create or replace temp view classified as
         select
             e.clau, e.nom, e.import_eur, e.muni_fega,
-            case when k.has_muni then 'match'
-                 when k.clau is not null then 'possible'
-                 when c.clau is not null then 'possible'
+            case when k.clau is not null and k.n_ck = 1 then 'confirmat'  -- exacte unic
+                 when k.clau is not null then 'ambigu'  -- exacte amb >1 candidat
+                 when c.clau is not null and c.n_core = 1 then 'confirmat'  -- nucli unic
+                 when c.clau is not null then 'ambigu'  -- nucli amb >1 candidat
                  else 'no-match' end as tipus,
+            case when k.clau is not null then 'exacte'
+                 when c.clau is not null then 'nucli' end as metode,
             coalesce(k.cif, c.cif) as cif,
             coalesce(k.clau_reg, c.clau_reg) as clau_reg,
             coalesce(k.coop_nom, c.coop_nom) as coop_nom,
@@ -131,32 +121,32 @@ def measure(con: duckdb.DuckDBPyConnection) -> dict:
     build_classified(con)
     row = con.execute("""
         select count(*) n, sum(import_eur) imp,
-               count(*) filter (where tipus='match') n_m,
-               count(*) filter (where tipus='possible') n_p,
+               count(*) filter (where tipus='confirmat') n_c,
+               count(*) filter (where tipus='ambigu') n_a,
                count(*) filter (where tipus='no-match') n_nm,
-               sum(import_eur) filter (where tipus='match') imp_m,
-               sum(import_eur) filter (where tipus='possible') imp_p,
-               count(*) filter (where tipus in ('match','possible') and cif is not null) n_cif
+               sum(import_eur) filter (where tipus='confirmat') imp_c,
+               sum(import_eur) filter (where tipus='ambigu') imp_a,
+               count(*) filter (where tipus in ('confirmat','ambigu') and cif is not null) n_cif
         from classified
     """).fetchone()
-    n, imp, n_m, n_p, n_nm, imp_m, imp_p, n_cif = (x or 0 for x in row)
+    n, imp, n_c, n_a, n_nm, imp_c, imp_a, n_cif = (x or 0 for x in row)
     amb = con.execute("""
-        select count(*) filter (where tipus in ('match','possible')) tot,
-               count(*) filter (where tipus in ('match','possible') and n_cand > 1) ambig
+        select count(*) filter (where tipus in ('confirmat','ambigu')) tot,
+               count(*) filter (where tipus='ambigu') ambig
         from classified
     """).fetchone()
     amb_ex = con.execute("""
         select nom, coop_nom, n_cand, round(import_eur) imp from classified
-        where tipus in ('match','possible') and n_cand > 1 order by import_eur desc limit 8
+        where tipus='ambigu' order by import_eur desc limit 8
     """).fetchall()
     return {
         "n": n,
         "imp": imp,
-        "n_match": n_m,
-        "n_possible": n_p,
+        "n_confirmat": n_c,
+        "n_ambigu": n_a,
         "n_nomatch": n_nm,
-        "imp_match": imp_m,
-        "imp_possible": imp_p,
+        "imp_confirmat": imp_c,
+        "imp_ambigu": imp_a,
         "n_cif": n_cif,
         "ambig_total": amb[0] or 0,
         "ambig_n": amb[1] or 0,
@@ -168,11 +158,11 @@ def write_sample(con: duckdb.DuckDBPyConnection, path: Path = SAMPLE_CSV, n: int
     path.parent.mkdir(parents=True, exist_ok=True)
     con.execute(f"""
         copy (
-            select nom as fega_nom, coop_nom, tipus,
+            select nom as fega_nom, coop_nom, tipus, metode,
                    muni_fega as municipi_fega, coop_muni as municipi_coop,
                    n_cand as candidats_coop, cif as cif_candidat, clau_reg as clau_registral,
                    round(import_eur) as import_eur, '' as veredicte_humà
-            from classified where tipus in ('match','possible')
+            from classified where tipus in ('confirmat','ambigu')
             order by tipus, import_eur desc limit {n}
         ) to '{path.as_posix()}' (header, delimiter ',')
     """)
@@ -181,18 +171,18 @@ def write_sample(con: duckdb.DuckDBPyConnection, path: Path = SAMPLE_CSV, n: int
 
 def _fmt(r: dict) -> str:
     n = r["n"] or 1
-    cov_n = 100 * (r["n_match"] + r["n_possible"]) / n
-    cov_e = 100 * (r["imp_match"] + r["imp_possible"]) / r["imp"] if r["imp"] else 0
+    cov_n = 100 * (r["n_confirmat"] + r["n_ambigu"]) / n
+    cov_e = 100 * (r["imp_confirmat"] + r["imp_ambigu"]) / r["imp"] if r["imp"] else 0
     amb_pct = 100 * r["ambig_n"] / r["ambig_total"] if r["ambig_total"] else 0
-    pm, pp, pnm = 100 * r["n_match"] / n, 100 * r["n_possible"] / n, 100 * r["n_nomatch"] / n
+    pc, pa, pnm = 100 * r["n_confirmat"] / n, 100 * r["n_ambigu"] / n, 100 * r["n_nomatch"] / n
     lines = [
-        "=== ENLLAC FEGA x Cooperatives CV (determinista, per nom canonic + municipi) ===",
+        "=== ENLLAC FEGA x Cooperatives CV (determinista, per nom canonic) ===",
         f"\nSUBCONJUNT COOPERATIU de FEGA: {r['n']:,} entitats, {r['imp']:,.0f} EUR",
-        f"  match    {r['n_match']:>5,}  ({pm:.1f}%)  {r['imp_match']:>13,.0f} EUR",
-        f"  possible {r['n_possible']:>5,}  ({pp:.1f}%)  {r['imp_possible']:>13,.0f} EUR",
-        f"  no-match {r['n_nomatch']:>5,}  ({pnm:.1f}%)",
-        f"  => cobertura (match+possible): {cov_n:.1f}% entitats, {cov_e:.1f}% euros",
-        f"\nCIF GUANYATS (entitats match+possible amb CIF de cooperativa): {r['n_cif']:,}",
+        f"  confirmat {r['n_confirmat']:>5,}  ({pc:.1f}%)  {r['imp_confirmat']:>13,.0f} EUR",
+        f"  ambigu    {r['n_ambigu']:>5,}  ({pa:.1f}%)  {r['imp_ambigu']:>13,.0f} EUR",
+        f"  no-match  {r['n_nomatch']:>5,}  ({pnm:.1f}%)",
+        f"  => cobertura (confirmat+ambigu): {cov_n:.1f}% entitats, {cov_e:.1f}% euros",
+        f"\nCIF GUANYATS (entitats enllacades amb CIF de cooperativa): {r['n_cif']:,}",
         f"AMBIGUITAT (clau >1 cooperativa): {r['ambig_n']:,}/{r['ambig_total']:,} ({amb_pct:.1f}%)",
     ]
     for nom, coop_nom, n_cand, imp in r["ambig_examples"]:

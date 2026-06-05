@@ -6,10 +6,12 @@ el Nº REGISTRO del directori. Emet sempre estat (match/possible/no-match) i tra
 un enllac dur. Sense CIF: s'arrossega el numero de registre com a identificador registral.
 Mesura + mostra; NO toca el mart ni l'explorador. Reutilitza canon() de linkage/coverage.py.
 
-Estats:
-  - match    = nucli-SAT del nom igual I municipi coincident.
-  - possible = nucli-SAT igual amb municipi distint/sense resoldre, O numero de registre igual.
-  - no-match = res.
+Principi: el numero que FEGA encasta al nom pot estar MAL ESCRIT -> nom + municipi son
+l'autoritat, el numero nomes corrobora. Es puntua cada candidat (nom 4 + numero 2 + municipi 1).
+  - confirmat = una sola entrada amb la millor puntuacio.
+  - ambigu    = empat al cim (>=2 entrades igual de plausibles).
+  - no-match  = res.
+metode: codi / rescat (numero erroni rescatat pel nom) / nom+municipi / nucli.
 """
 
 from __future__ import annotations
@@ -18,8 +20,6 @@ import logging
 from pathlib import Path
 
 import duckdb
-
-from linkage.coverage import canon
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("linkage.sat")
@@ -39,18 +39,21 @@ def sat_subset(col: str) -> str:
     )
 
 
-def sat_core(col: str) -> str:
-    """Nucli-SAT: nom sense els tokens de forma/registre (SAT/NUM/N/CV...) ni numeros.
-
-    FEGA encasta "SAT <num>" al nom de forma inconsistent; el directori porta la denominacio
-    neta. El nucli alinea els dos costats. Dues passades per als tokens consecutius.
+def sat_namekey(col: str) -> str:
+    """Clau de nom robusta per a SAT: lleva els tokens de forma/registre (SAT/NUM/N/CV...) i
+    qualsevol token que comence per digit (numeros purs i numero+ambit "265CV"), parteix en
+    paraules, les ORDENA i les concatena. Aixi neutralitza la inversio d'article i l'ordre de
+    paraules ("LA SOLANA" = "SOLANA, LA"). Replica sat_namekey() de la macro dbt.
     """
     s = f"' ' || upper(strip_accents({col})) || ' '"
     s = f"regexp_replace({s}, '[^A-Z0-9]', ' ', 'g')"
     s = f"regexp_replace({s}, ' ({SAT_TOKENS}) ', ' ', 'g')"
     s = f"regexp_replace({s}, ' ({SAT_TOKENS}) ', ' ', 'g')"
-    s = f"regexp_replace({s}, ' [0-9]+ ', ' ', 'g')"
-    return f"nullif(regexp_replace({s}, '[^A-Z0-9]', '', 'g'), '')"
+    s = f"regexp_replace({s}, ' [0-9][A-Z0-9]* ', ' ', 'g')"
+    return (
+        "nullif(array_to_string(list_sort(list_filter("
+        f"string_split_regex(trim({s}), '[^A-Z0-9]+'), x -> length(x) >= 1)), ''), '')"
+    )
 
 
 def regnum(col: str) -> str:
@@ -73,69 +76,82 @@ def load_sat(con: duckdb.DuckDBPyConnection, sat_dir: Path = SAT_DIR) -> int:
     return con.execute("select count(*) from sat_raw").fetchone()[0]
 
 
+def _muni_norm(col: str) -> str:
+    return f"nullif(regexp_replace(upper(strip_accents({col})), '[^A-Z0-9]', '', 'g'), '')"
+
+
 def build_classified(con: duckdb.DuckDBPyConnection) -> None:
     """Construeix `classified` (un registre per entitat SAT de FEGA). Requereix `fega` i
-    `sat_raw`."""
+    `sat_raw`.
+
+    El numero que FEGA encasta al nom pot estar MAL ESCRIT, aixi que NO es clau infal·lible. El
+    senyal mes robust es NOM + MUNICIPI; el numero nomes corrobora. Es puntua cada entrada del
+    directori candidata (nom 4 + numero 2 + municipi 1) i guanya la de millor puntuacio:
+    confirmat si nomes una hi empata al cim, ambigu si >=2, no-match si cap.
+    """
     con.execute(f"""
-        create or replace temp view sat as
+        create or replace temp view dir as
         select distinct nom as sat_nom, num_reg, municipi as sat_muni,
-               {sat_core("nom")} as namekey, {canon("municipi")} as muni_ck
-        from sat_raw where {sat_core("nom")} is not null
+               try_cast(regexp_replace(num_reg, '[^0-9]', '', 'g') as bigint) as num_core,
+               {sat_namekey("nom")} as namekey, {_muni_norm("municipi")} as muni
+        from sat_raw
     """)
     con.execute(f"""
         create or replace temp view fega_ent as
         select clau, any_value(nom_canonic) as nom, sum(import_eur) as import_eur,
-               max(municipi) as muni_fega, any_value({sat_core("nom_canonic")}) as namekey,
-               any_value({regnum("nom_canonic")}) as regnum
+               max(municipi) as muni_fega, any_value({sat_namekey("nom_canonic")}) as namekey,
+               any_value({regnum("nom_canonic")}) as regnum, max({_muni_norm("municipi")}) as muni
         from fega where {sat_subset("nom_canonic")} group by clau
     """)
-    con.execute(f"""
-        create or replace temp view fega_muni as
-        select distinct clau, {canon("municipi")} as muni_ck
-        from fega where {sat_subset("nom_canonic")} and municipi is not null
-    """)
-    # Candidats per nucli-SAT del nom (>=4 caracters), amb si el municipi coincideix.
+    # Candidata si casa pel NOM (tokens ordenats) o pel NUMERO. Tres senyals per separat.
     con.execute("""
-        create or replace temp view name_cand as
-        select e.clau, s.sat_nom, s.num_reg, s.sat_muni,
-               exists (select 1 from fega_muni m where m.clau = e.clau and m.muni_ck = s.muni_ck)
-                   as muni_ok
-        from fega_ent e join sat s on s.namekey = e.namekey and length(e.namekey) >= 4
+        create or replace temp view cand as
+        select f.clau, f.regnum as fega_regnum, d.num_reg, d.sat_nom, d.sat_muni,
+               (f.namekey is not null and length(f.namekey) >= 4 and d.namekey = f.namekey)
+                   as name_ok,
+               (f.regnum is not null and d.num_core = try_cast(f.regnum as bigint)) as num_ok,
+               (f.muni is not null and d.muni is not null and length(f.muni) >= 4
+                and (contains(d.muni, f.muni) or contains(f.muni, d.muni))) as muni_ok
+        from fega_ent f join dir d
+          on (f.namekey is not null and length(f.namekey) >= 4 and d.namekey = f.namekey)
+          or (f.regnum is not null and d.num_core = try_cast(f.regnum as bigint))
+    """)
+    # Puntuacio: nom 4 (autoritat) + numero 2 (corroboracio) + municipi 1 (desempat).
+    con.execute("""
+        create or replace temp view scored as
+        select *, (case when name_ok then 4 else 0 end)
+                   + (case when num_ok then 2 else 0 end)
+                   + (case when muni_ok then 1 else 0 end) as score
+        from cand
     """)
     con.execute("""
-        create or replace temp view name_agg as
-        select clau, count(distinct sat_nom) as n_name, bool_or(muni_ok) as has_muni,
-               arg_max(num_reg, muni_ok::int) as num_reg,
-               arg_max(sat_nom, muni_ok::int) as sat_nom,
-               arg_max(sat_muni, muni_ok::int) as sat_muni
-        from name_cand group by clau
+        create or replace temp view ranked as
+        select *, max(score) over (partition by clau) as best,
+               row_number() over (partition by clau order by score desc, num_ok desc, num_reg)
+                   as rn
+        from scored
     """)
-    # Candidats per numero de registre (nomes per a entitats sense candidat de nom).
     con.execute("""
-        create or replace temp view reg_agg as
-        select e.clau, count(distinct s.sat_nom) as n_reg,
-               any_value(s.num_reg) as num_reg, any_value(s.sat_nom) as sat_nom,
-               any_value(s.sat_muni) as sat_muni
-        from fega_ent e
-        join sat s on try_cast(s.num_reg as bigint) = try_cast(e.regnum as bigint)
-        where e.regnum is not null and e.clau not in (select clau from name_agg)
-        group by e.clau
+        create or replace temp view ranked2 as
+        select *, count(*) filter (where score = best) over (partition by clau) as n_top
+        from ranked
     """)
+    con.execute("create or replace temp view winner as select * from ranked2 where rn = 1")
     con.execute("""
         create or replace temp view classified as
         select
             e.clau, e.nom, e.import_eur, e.muni_fega,
-            case when n.has_muni then 'match'
-                 when n.clau is not null then 'possible'
-                 when r.clau is not null then 'possible'
-                 else 'no-match' end as tipus,
-            coalesce(n.num_reg, r.num_reg) as num_registre,
-            coalesce(n.sat_nom, r.sat_nom) as sat_nom,
-            coalesce(n.sat_muni, r.sat_muni) as sat_muni,
-            coalesce(n.n_name, r.n_reg, 0) as n_cand
+            case when w.clau is null then 'no-match'
+                 when w.n_top = 1 then 'confirmat' else 'ambigu' end as tipus,
+            case when w.clau is null then null
+                 when w.num_ok then 'codi'  -- el numero corrobora
+                 when w.fega_regnum is not null then 'rescat'  -- numero erroni; nom el rescata
+                 when w.muni_ok then 'nom+municipi'  -- sense numero; nom + municipi
+                 else 'nucli' end as metode,  -- sense numero ni municipi; nomes nom
+            w.num_reg as num_registre, w.sat_nom, w.sat_muni,
+            coalesce(w.n_top, 0) as n_cand
         from fega_ent e
-        left join name_agg n on n.clau = e.clau
-        left join reg_agg r on r.clau = e.clau
+        left join winner w on w.clau = e.clau
     """)
 
 
@@ -143,31 +159,31 @@ def measure(con: duckdb.DuckDBPyConnection) -> dict:
     build_classified(con)
     row = con.execute("""
         select count(*) n, sum(import_eur) imp,
-               count(*) filter (where tipus='match') n_m,
-               count(*) filter (where tipus='possible') n_p,
+               count(*) filter (where tipus='confirmat') n_c,
+               count(*) filter (where tipus='ambigu') n_a,
                count(*) filter (where tipus='no-match') n_nm,
-               sum(import_eur) filter (where tipus='match') imp_m,
-               sum(import_eur) filter (where tipus='possible') imp_p
+               sum(import_eur) filter (where tipus='confirmat') imp_c,
+               sum(import_eur) filter (where tipus='ambigu') imp_a
         from classified
     """).fetchone()
-    n, imp, n_m, n_p, n_nm, imp_m, imp_p = (x or 0 for x in row)
+    n, imp, n_c, n_a, n_nm, imp_c, imp_a = (x or 0 for x in row)
     amb = con.execute("""
-        select count(*) filter (where tipus in ('match','possible')) tot,
-               count(*) filter (where tipus in ('match','possible') and n_cand > 1) ambig
+        select count(*) filter (where tipus in ('confirmat','ambigu')) tot,
+               count(*) filter (where tipus='ambigu') ambig
         from classified
     """).fetchone()
     amb_ex = con.execute("""
         select nom, sat_nom, n_cand, round(import_eur) imp from classified
-        where tipus in ('match','possible') and n_cand > 1 order by import_eur desc limit 8
+        where tipus='ambigu' order by import_eur desc limit 8
     """).fetchall()
     return {
         "n": n,
         "imp": imp,
-        "n_match": n_m,
-        "n_possible": n_p,
+        "n_confirmat": n_c,
+        "n_ambigu": n_a,
         "n_nomatch": n_nm,
-        "imp_match": imp_m,
-        "imp_possible": imp_p,
+        "imp_confirmat": imp_c,
+        "imp_ambigu": imp_a,
         "ambig_total": amb[0] or 0,
         "ambig_n": amb[1] or 0,
         "ambig_examples": amb_ex,
@@ -178,11 +194,11 @@ def write_sample(con: duckdb.DuckDBPyConnection, path: Path = SAMPLE_CSV, n: int
     path.parent.mkdir(parents=True, exist_ok=True)
     con.execute(f"""
         copy (
-            select nom as fega_nom, sat_nom, tipus,
+            select nom as fega_nom, sat_nom, tipus, metode,
                    muni_fega as municipi_fega, sat_muni as municipi_sat,
                    n_cand as candidats_sat, num_registre as numero_registre,
                    round(import_eur) as import_eur, '' as veredicte_humà
-            from classified where tipus in ('match','possible')
+            from classified where tipus in ('confirmat','ambigu')
             order by tipus, import_eur desc limit {n}
         ) to '{path.as_posix()}' (header, delimiter ',')
     """)
@@ -191,17 +207,17 @@ def write_sample(con: duckdb.DuckDBPyConnection, path: Path = SAMPLE_CSV, n: int
 
 def _fmt(r: dict) -> str:
     nn = r["n"] or 1
-    cov_n = 100 * (r["n_match"] + r["n_possible"]) / nn
-    cov_e = 100 * (r["imp_match"] + r["imp_possible"]) / r["imp"] if r["imp"] else 0
+    cov_n = 100 * (r["n_confirmat"] + r["n_ambigu"]) / nn
+    cov_e = 100 * (r["imp_confirmat"] + r["imp_ambigu"]) / r["imp"] if r["imp"] else 0
     amb_pct = 100 * r["ambig_n"] / r["ambig_total"] if r["ambig_total"] else 0
-    pm, pp, pnm = 100 * r["n_match"] / nn, 100 * r["n_possible"] / nn, 100 * r["n_nomatch"] / nn
+    pc, pa, pnm = 100 * r["n_confirmat"] / nn, 100 * r["n_ambigu"] / nn, 100 * r["n_nomatch"] / nn
     lines = [
-        "=== ENLLAC FEGA x SAT de la CV (nucli-SAT + numero de registre + municipi) ===",
+        "=== ENLLAC FEGA x SAT de la CV (numero de registre + nucli-SAT del nom) ===",
         f"\nSUBCONJUNT SAT de FEGA: {r['n']:,} entitats, {r['imp']:,.0f} EUR",
-        f"  match    {r['n_match']:>4,}  ({pm:.1f}%)  {r['imp_match']:>13,.0f} EUR",
-        f"  possible {r['n_possible']:>4,}  ({pp:.1f}%)  {r['imp_possible']:>13,.0f} EUR",
-        f"  no-match {r['n_nomatch']:>4,}  ({pnm:.1f}%)",
-        f"  => cobertura (match+possible): {cov_n:.1f}% entitats, {cov_e:.1f}% euros",
+        f"  confirmat {r['n_confirmat']:>4,}  ({pc:.1f}%)  {r['imp_confirmat']:>13,.0f} EUR",
+        f"  ambigu    {r['n_ambigu']:>4,}  ({pa:.1f}%)  {r['imp_ambigu']:>13,.0f} EUR",
+        f"  no-match  {r['n_nomatch']:>4,}  ({pnm:.1f}%)",
+        f"  => cobertura (confirmat+ambigu): {cov_n:.1f}% entitats, {cov_e:.1f}% euros",
         f"\nAMBIGUITAT (nom >1 SAT): {r['ambig_n']:,}/{r['ambig_total']:,} ({amb_pct:.1f}%)",
     ]
     for nom, sat_nom, n_cand, imp in r["ambig_examples"]:
